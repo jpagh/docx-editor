@@ -1,0 +1,26 @@
+[project]
+authors = [{ email = "jackadamson@gmail.com", name = "Jack Adamson" }]
+name = "docx-editor"
+version = "2026.7.0"
+description = "CLI tool to edit .docx files programmatically via the docxedit library"
+license = "MIT"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["docxedit>=1.2.1"]
+
+[project.urls]
+Source = "https://github.com/jpagh/docx-editor"
+Issues = "https://github.com/jpagh/docx-editor/issues"
+
+[project.scripts]
+docx-editor = "main:main"
+
+[tool.uv]
+package = true
+
+[dependency-groups]
+dev = ["pytest>=9.1.1"]
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"

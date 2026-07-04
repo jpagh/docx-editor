@@ -1,0 +1,345 @@
+import argparse
+import json
+import logging
+import shutil
+import sys
+
+import docx
+import docxedit
+
+logging.basicConfig(level=logging.WARNING)
+_DOCXEDIT_LOGGER = logging.getLogger("docxedit")
+_DOCXEDIT_LOGGER.setLevel(logging.CRITICAL)
+
+
+def _save_doc(doc, args):
+    if args.output:
+        doc.save(args.output)
+    else:
+        bak = args.input + ".bak"
+        shutil.copy2(args.input, bak)
+        doc.save(args.input)
+
+
+def _list_paragraphs(doc, args):
+    items = [{"index": i, "text": p.text} for i, p in enumerate(doc.paragraphs)]
+    if args.json:
+        print(json.dumps(items))
+    else:
+        for item in items:
+            print(f"[{item['index']}] {item['text']}")
+
+
+def _list_tables(doc, args):
+    tables = []
+    for i, table in enumerate(doc.tables):
+        cells = [[cell.text for cell in row.cells] for row in table.rows]
+        tables.append(
+            {
+                "index": i,
+                "rows": len(table.rows),
+                "cols": len(table.columns),
+                "cells": cells,
+            }
+        )
+    if args.json:
+        print(json.dumps(tables))
+    else:
+        for t in tables:
+            print(f"--- Table {t['index']} ({t['rows']} rows x {t['cols']} cols) ---")
+            for ri, row in enumerate(t["cells"]):
+                print(f"  Row {ri}: {' | '.join(row)}")
+
+
+def _smart_replace_in_paragraph(paragraph, old, new):
+    runs = paragraph.runs
+    full_text = "".join(r.text for r in runs)
+
+    occurrences = []
+    pos = full_text.find(old)
+    while pos != -1:
+        occurrences.append(pos)
+        pos = full_text.find(old, pos + 1)
+
+    if not occurrences:
+        return 0
+
+    for pos in reversed(occurrences):
+        match_end = pos + len(old)
+
+        affected_indices = []
+        affected_starts = []
+        affected_ends = []
+        accum = 0
+        for i, run in enumerate(runs):
+            run_start = accum
+            run_end = accum + len(run.text)
+            if pos < run_end and match_end > run_start:
+                affected_indices.append(i)
+                affected_starts.append(run_start)
+                affected_ends.append(run_end)
+            accum += len(run.text)
+
+        if not affected_indices:
+            continue
+
+        remaining_new = new
+
+        for idx in range(len(affected_indices) - 1, -1, -1):
+            i = affected_indices[idx]
+            run_start = affected_starts[idx]
+            run_end = affected_ends[idx]
+
+            match_start_in_run = max(pos, run_start) - run_start
+            match_end_in_run = min(match_end, run_end) - run_start
+
+            is_multi = len(affected_indices) > 1
+            is_last_run = idx == len(affected_indices) - 1
+            is_first_run = idx == 0
+
+            if is_multi and is_last_run:
+                old_suffix = runs[i].text[match_start_in_run:match_end_in_run]
+                if len(old_suffix) > 0 and remaining_new.endswith(old_suffix):
+                    remaining_new = remaining_new[: -len(old_suffix)]
+                    continue
+
+            if is_first_run:
+                runs[i].text = (
+                    runs[i].text[:match_start_in_run]
+                    + remaining_new
+                    + runs[i].text[match_end_in_run:]
+                )
+            else:
+                runs[i].text = (
+                    runs[i].text[:match_start_in_run]
+                    + runs[i].text[match_end_in_run:]
+                )
+
+    return len(occurrences)
+
+
+def _smart_replace_string(doc, old, new, include_tables=True, max_paragraph=None):
+    total = 0
+    for idx, paragraph in enumerate(doc.paragraphs):
+        if max_paragraph is not None and idx >= max_paragraph:
+            break
+        if old in paragraph.text:
+            total += _smart_replace_in_paragraph(paragraph, old, new)
+    if include_tables:
+        for table in doc.tables:
+            for row in table.rows:
+                for cell in row.cells:
+                    for paragraph in cell.paragraphs:
+                        if old in paragraph.text:
+                            total += _smart_replace_in_paragraph(
+                                paragraph, old, new
+                            )
+    return total
+
+
+def _replace(doc, args):
+    if args.smart:
+        count = _smart_replace_string(
+            doc, args.old, args.new, include_tables=args.include_tables
+        )
+    else:
+        docxedit.replace_string(
+            doc, args.old, args.new, include_tables=args.include_tables
+        )
+        count = None
+    _save_doc(doc, args)
+    if count is not None:
+        print(
+            f"Replaced '{args.old}' with '{args.new}' ({count} instance(s), smart=True)"
+        )
+    else:
+        print(
+            f"Replaced '{args.old}' with '{args.new}' (include_tables={args.include_tables})"
+        )
+
+
+def _replace_up_to(doc, args):
+    if args.smart:
+        count = _smart_replace_string(
+            doc, args.old, args.new, include_tables=True, max_paragraph=args.paragraph
+        )
+        _save_doc(doc, args)
+        print(
+            f"Replaced '{args.old}' with '{args.new}' up to paragraph {args.paragraph} "
+            f"({count} instance(s), smart=True)"
+        )
+    else:
+        docxedit.replace_string_up_to_paragraph(
+            doc, args.old, args.new, args.paragraph
+        )
+        _save_doc(doc, args)
+        print(
+            f"Replaced '{args.old}' with '{args.new}' up to paragraph {args.paragraph}"
+        )
+
+
+def _show(doc, args):
+    matches = [p.text for p in doc.paragraphs if args.text in p.text]
+    if args.json:
+        if matches:
+            print(json.dumps({"found": True, "text": " | ".join(matches)}))
+        else:
+            print(json.dumps({"found": False, "text": ""}))
+    else:
+        if not matches:
+            print(f"No matches found for '{args.text}'")
+        else:
+            for m in matches:
+                print(m)
+
+
+def _remove_lines(doc, args):
+    docxedit.remove_lines(doc, args.first_line, args.count, show_errors=False)
+    _save_doc(doc, args)
+    print(f"Removed lines starting with '{args.first_line}' ({args.count} line(s))")
+
+
+def _set_table_cell(doc, args):
+    try:
+        table = doc.tables[args.table_idx]
+    except IndexError:
+        print(
+            f"Error: Table index {args.table_idx} out of range (have {len(doc.tables)} tables)",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    docxedit.add_text_in_table(table, args.row, args.col, args.text)
+    _save_doc(doc, args)
+    print(f"Set table {args.table_idx} cell ({args.row}, {args.col}) to '{args.text}'")
+
+
+def _set_table_font_size(doc, args):
+    try:
+        table = doc.tables[args.table_idx]
+    except IndexError:
+        print(
+            f"Error: Table index {args.table_idx} out of range (have {len(doc.tables)} tables)",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    docxedit.change_table_font_size(table, args.size)
+    _save_doc(doc, args)
+    print(f"Set font size in table {args.table_idx} to {args.size}")
+
+
+def _setup_parser():
+    parser = argparse.ArgumentParser(
+        description="Edit .docx files from the command line."
+    )
+    parser.add_argument("-i", "--input", required=True, help="Path to the .docx file")
+    parser.add_argument(
+        "-o", "--output", help="Output path (default: overwrite input with .bak backup)"
+    )
+    parser.add_argument(
+        "--json", action="store_true", help="Machine-readable JSON output"
+    )
+    parser.add_argument(
+        "--verbose", action="store_true", help="Show library info and debug messages"
+    )
+
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p = sub.add_parser("list-paragraphs", help="List all paragraphs with index numbers")
+    p.set_defaults(func=_list_paragraphs)
+
+    p = sub.add_parser(
+        "list-tables", help="List all tables with dimensions and cell contents"
+    )
+    p.set_defaults(func=_list_tables)
+
+    p = sub.add_parser(
+        "replace",
+        help="Replace old text with new text in paragraphs and optionally tables",
+    )
+    p.add_argument("--old", required=True, help="Text to find")
+    p.add_argument("--new", required=True, help="Replacement text")
+    p.add_argument(
+        "--skip-tables",
+        dest="include_tables",
+        action="store_false",
+        default=True,
+        help="Skip replacement in tables",
+    )
+    p.add_argument(
+        "--smart",
+        action="store_true",
+        help="Match across run boundaries, preserving original run formatting",
+    )
+    p.set_defaults(func=_replace)
+
+    p = sub.add_parser(
+        "replace-up-to",
+        help="Replace old text with new text up to a given paragraph index",
+    )
+    p.add_argument("--old", required=True, help="Text to find")
+    p.add_argument("--new", required=True, help="Replacement text")
+    p.add_argument(
+        "--paragraph",
+        required=True,
+        type=int,
+        help="Stop at this paragraph index (0-based)",
+    )
+    p.add_argument(
+        "--smart",
+        action="store_true",
+        help="Match across run boundaries, preserving original run formatting",
+    )
+    p.set_defaults(func=_replace_up_to)
+
+    p = sub.add_parser("show", help="Show lines containing specific text")
+    p.add_argument("--text", required=True, help="Text to search for")
+    p.set_defaults(func=_show)
+
+    p = sub.add_parser(
+        "remove-lines", help="Remove lines starting from first matching text"
+    )
+    p.add_argument(
+        "--first-line", required=True, help="Text in the first line to remove"
+    )
+    p.add_argument("--count", required=True, type=int, help="Number of lines to remove")
+    p.set_defaults(func=_remove_lines)
+
+    p = sub.add_parser("set-table-cell", help="Set the text of a specific table cell")
+    p.add_argument("--table-idx", required=True, type=int, help="Table index (0-based)")
+    p.add_argument("--row", required=True, type=int, help="Row index (0-based)")
+    p.add_argument("--col", required=True, type=int, help="Column index (0-based)")
+    p.add_argument("--text", required=True, help="Text to set")
+    p.set_defaults(func=_set_table_cell)
+
+    p = sub.add_parser(
+        "set-table-font-size", help="Change the font size of all text in a table"
+    )
+    p.add_argument("--table-idx", required=True, type=int, help="Table index (0-based)")
+    p.add_argument("--size", required=True, type=int, help="Font size in points")
+    p.set_defaults(func=_set_table_font_size)
+
+    return parser
+
+
+def main():
+    parser = _setup_parser()
+    args = parser.parse_args()
+
+    if args.verbose:
+        logging.basicConfig(level=logging.INFO, force=True)
+        _DOCXEDIT_LOGGER.setLevel(logging.INFO)
+
+    try:
+        doc = docx.Document(args.input)
+    except FileNotFoundError:
+        print(f"Error: File '{args.input}' not found", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error: Could not load document '{args.input}': {e}", file=sys.stderr)
+        sys.exit(1)
+
+    args.func(doc, args)
+
+
+if __name__ == "__main__":
+    main()
