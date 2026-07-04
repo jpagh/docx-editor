@@ -52,6 +52,39 @@ def _list_tables(doc, args):
                 print(f"  Row {ri}: {' | '.join(row)}")
 
 
+_CURLY_QUOTES = str.maketrans(
+    {"\u201c": '"', "\u201d": '"', "\u2018": "'", "\u2019": "'"}
+)
+
+
+def _norm_quotes(text):
+    return text.translate(_CURLY_QUOTES)
+
+
+def _match_quotes(old, new, orig):
+    """Replace straight quotes in *new* with curly quotes from *orig* where *old* had them.
+
+    Matches the N-th occurrence of each quote type independently so that
+    "hello" -> "can't" correctly maps both double-quotes.
+    """
+    result = list(new)
+    for qchar in ('"', "'"):
+        o_positions = [i for i, c in enumerate(old) if c == qchar]
+        n_idx = 0
+        for ni, nc in enumerate(new):
+            if nc == qchar and n_idx < len(o_positions):
+                oi = o_positions[n_idx]
+                if oi < len(orig) and orig[oi] in {
+                    "\u201c",
+                    "\u201d",
+                    "\u2018",
+                    "\u2019",
+                }:
+                    result[ni] = orig[oi]
+                n_idx += 1
+    return "".join(result)
+
+
 def _run_text(r_el):
     t = r_el.find(qn("w:t"))
     return (t.text or "") if t is not None else ""
@@ -61,21 +94,34 @@ def _all_run_elements(paragraph):
     return paragraph._p.findall(".//" + qn("w:r"))
 
 
-def _smart_replace_in_paragraph(paragraph, old, new):
+def _paragraph_text(paragraph):
+    return "".join(_run_text(el) for el in _all_run_elements(paragraph))
+
+
+def _smart_replace_in_paragraph(paragraph, old, new, match_quotes=False):
     run_els = _all_run_elements(paragraph)
-    full_text = "".join(_run_text(el) for el in run_els)
+    full_text = _paragraph_text(paragraph)
+
+    match_old = _norm_quotes(old) if match_quotes else old
+    match_text = _norm_quotes(full_text) if match_quotes else full_text
 
     occurrences = []
-    pos = full_text.find(old)
+    pos = match_text.find(match_old)
     while pos != -1:
         occurrences.append(pos)
-        pos = full_text.find(old, pos + 1)
+        pos = match_text.find(match_old, pos + 1)
 
     if not occurrences:
         return 0
 
     for pos in reversed(occurrences):
         match_end = pos + len(old)
+
+        if match_quotes:
+            orig_match = full_text[pos : pos + len(old)]
+            local_new = _match_quotes(_norm_quotes(old), new, orig_match)
+        else:
+            local_new = new
 
         affected_indices = []
         affected_starts = []
@@ -93,7 +139,7 @@ def _smart_replace_in_paragraph(paragraph, old, new):
         if not affected_indices:
             continue
 
-        remaining_new = new
+        remaining_new = local_new
 
         for idx in range(len(affected_indices) - 1, -1, -1):
             i = affected_indices[idx]
@@ -129,27 +175,43 @@ def _smart_replace_in_paragraph(paragraph, old, new):
     return len(occurrences)
 
 
-def _smart_replace_string(doc, old, new, include_tables=True, max_paragraph=None):
+def _smart_replace_string(
+    doc, old, new, include_tables=True, max_paragraph=None, match_quotes=False
+):
+    match_old = _norm_quotes(old) if match_quotes else old
     total = 0
     for idx, paragraph in enumerate(doc.paragraphs):
         if max_paragraph is not None and idx >= max_paragraph:
             break
-        if old in paragraph.text:
-            total += _smart_replace_in_paragraph(paragraph, old, new)
+        text = _paragraph_text(paragraph)
+        check = _norm_quotes(text) if match_quotes else text
+        if match_old in check:
+            total += _smart_replace_in_paragraph(paragraph, old, new, match_quotes)
     if include_tables:
         for table in doc.tables:
             for row in table.rows:
                 for cell in row.cells:
                     for paragraph in cell.paragraphs:
-                        if old in paragraph.text:
-                            total += _smart_replace_in_paragraph(paragraph, old, new)
+                        text = _paragraph_text(paragraph)
+                        check = _norm_quotes(text) if match_quotes else text
+                        if match_old in check:
+                            total += _smart_replace_in_paragraph(
+                                paragraph, old, new, match_quotes
+                            )
     return total
 
 
 def _replace(doc, args):
+    if args.match_quotes and not args.smart:
+        print("Error: --match-quotes requires --smart", file=sys.stderr)
+        sys.exit(1)
     if args.smart:
         count = _smart_replace_string(
-            doc, args.old, args.new, include_tables=args.include_tables
+            doc,
+            args.old,
+            args.new,
+            include_tables=args.include_tables,
+            match_quotes=args.match_quotes,
         )
     else:
         docxedit.replace_string(
@@ -158,9 +220,10 @@ def _replace(doc, args):
         count = None
     _save_doc(doc, args)
     if count is not None:
-        print(
-            f"Replaced '{args.old}' with '{args.new}' ({count} instance(s), smart=True)"
-        )
+        flags = "smart=True"
+        if args.match_quotes:
+            flags += ", match_quotes=True"
+        print(f"Replaced '{args.old}' with '{args.new}' ({count} instance(s), {flags})")
     else:
         print(
             f"Replaced '{args.old}' with '{args.new}' (include_tables={args.include_tables})"
@@ -168,14 +231,25 @@ def _replace(doc, args):
 
 
 def _replace_up_to(doc, args):
+    if args.match_quotes and not args.smart:
+        print("Error: --match-quotes requires --smart", file=sys.stderr)
+        sys.exit(1)
     if args.smart:
         count = _smart_replace_string(
-            doc, args.old, args.new, include_tables=True, max_paragraph=args.paragraph
+            doc,
+            args.old,
+            args.new,
+            include_tables=True,
+            max_paragraph=args.paragraph,
+            match_quotes=args.match_quotes,
         )
         _save_doc(doc, args)
+        flags = "smart=True"
+        if args.match_quotes:
+            flags += ", match_quotes=True"
         print(
             f"Replaced '{args.old}' with '{args.new}' up to paragraph {args.paragraph} "
-            f"({count} instance(s), smart=True)"
+            f"({count} instance(s), {flags})"
         )
     else:
         docxedit.replace_string_up_to_paragraph(doc, args.old, args.new, args.paragraph)
@@ -277,6 +351,11 @@ def _setup_parser():
         action="store_true",
         help="Match across run boundaries, preserving original run formatting",
     )
+    p.add_argument(
+        "--match-quotes",
+        action="store_true",
+        help="Match curly and straight quotes interchangeably (requires --smart)",
+    )
     p.set_defaults(func=_replace)
 
     p = sub.add_parser(
@@ -295,6 +374,11 @@ def _setup_parser():
         "--smart",
         action="store_true",
         help="Match across run boundaries, preserving original run formatting",
+    )
+    p.add_argument(
+        "--match-quotes",
+        action="store_true",
+        help="Match curly and straight quotes interchangeably (requires --smart)",
     )
     p.set_defaults(func=_replace_up_to)
 

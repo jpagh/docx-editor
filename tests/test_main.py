@@ -674,3 +674,133 @@ def test_smart_replace_string_max_paragraph(tmp_path):
     assert texts[0] == "A y"
     assert texts[1] == "B y"
     assert texts[2] == "C {{x}}"
+
+
+# ── match-quotes ─────────────────────────────────────────────────
+
+
+def test_norm_quotes():
+    from main import _norm_quotes
+
+    assert _norm_quotes("\u201chello\u201d") == '"hello"'
+    assert _norm_quotes("\u2018hello\u2019") == "'hello'"
+    assert _norm_quotes("hello") == "hello"
+    assert _norm_quotes('"hello"') == '"hello"'
+
+
+def test_match_quotes():
+    from main import _match_quotes
+
+    result = _match_quotes('"a"', '"b"', "\u201ca\u201d")
+    assert result == "\u201cb\u201d"
+
+    result = _match_quotes("'a'", "'b'", "\u2018a\u2019")
+    assert result == "\u2018b\u2019"
+
+    result = _match_quotes('"a"', '"b"', '"a"')
+    assert result == '"b"'  # straight quotes preserved when original had straight
+
+    result = _match_quotes('"hello"', '"can\'t"', "\u201chello\u201d")
+    assert (
+        result == "\u201ccan't\u201d"
+    )  # single quote in new doesn't confuse double-quote mapping
+
+
+def test_match_quotes_matches_curly():
+    d = docx.Document()
+    p = d.add_paragraph("\u201cHello World\u201d")
+    count = _smart_replace_in_paragraph(p, '"Hello World"', '"Hi"', match_quotes=True)
+    assert count == 1
+    assert p.text == "\u201cHi\u201d"
+
+
+def test_match_quotes_no_match_without_flag():
+    d = docx.Document()
+    p = d.add_paragraph("\u201cHello World\u201d")
+    count = _smart_replace_in_paragraph(p, '"Hello World"', '"Hi"', match_quotes=False)
+    assert count == 0  # should NOT match without flag
+
+
+def test_match_quotes_single_quotes():
+    d = docx.Document()
+    p = d.add_paragraph("\u2018hello\u2019")
+    count = _smart_replace_in_paragraph(p, "'hello'", "'bye'", match_quotes=True)
+    assert count == 1
+    assert p.text == "\u2018bye\u2019"
+
+
+def test_match_quotes_via_cli(capsys, tmp_path):
+    d = docx.Document()
+    d.add_paragraph("\u201cfoo\u201d")
+    d.add_paragraph('"foo"')
+    d.save(str(tmp_path / "in.docx"))
+
+    sys.argv = [
+        "docx-editor",
+        "-i",
+        str(tmp_path / "in.docx"),
+        "replace",
+        "--old",
+        '"foo"',
+        "--new",
+        '"bar"',
+        "--smart",
+        "--match-quotes",
+    ]
+    main()
+    out = capsys.readouterr().out
+    assert "2 instance(s)" in out
+    reopened = docx.Document(str(tmp_path / "in.docx"))
+    texts = [p.text for p in reopened.paragraphs]
+    assert "\u201cbar\u201d" in texts
+    assert '"bar"' in texts
+
+
+def test_match_quotes_requires_smart(capsys, tmp_path):
+    d = docx.Document()
+    d.add_paragraph("x")
+    d.save(str(tmp_path / "in.docx"))
+    sys.argv = [
+        "docx-editor",
+        "-i",
+        str(tmp_path / "in.docx"),
+        "replace",
+        "--old",
+        "x",
+        "--new",
+        "y",
+        "--match-quotes",
+    ]
+    with pytest.raises(SystemExit):
+        main()
+    assert "requires --smart" in capsys.readouterr().err
+
+
+def test_match_quotes_replace_up_to(capsys, tmp_path):
+    d = docx.Document()
+    d.add_paragraph("\u201cfoo\u201d")
+    d.add_paragraph("\u201cbar\u201d")
+    d.add_paragraph("\u201cbaz\u201d")
+    d.save(str(tmp_path / "in.docx"))
+
+    sys.argv = [
+        "docx-editor",
+        "-i",
+        str(tmp_path / "in.docx"),
+        "replace-up-to",
+        "--old",
+        '"foo"',
+        "--new",
+        '"FOO"',
+        "--paragraph",
+        "1",
+        "--smart",
+        "--match-quotes",
+    ]
+    main()
+    reopened = docx.Document(str(tmp_path / "in.docx"))
+    texts = [p.text for p in reopened.paragraphs]
+    assert "\u201cFOO\u201d" in texts[0]
+    assert "\u201cbar\u201d" in texts[1]  # unchanged (beyond paragraph limit)
+    assert "\u201cbaz\u201d" in texts[2]  # unchanged
+    assert "1 instance" in capsys.readouterr().out
