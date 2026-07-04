@@ -5,6 +5,7 @@ import shutil
 import sys
 
 import docx
+from docx.oxml.ns import qn
 import docxedit
 
 logging.basicConfig(level=logging.WARNING)
@@ -51,9 +52,18 @@ def _list_tables(doc, args):
                 print(f"  Row {ri}: {' | '.join(row)}")
 
 
+def _run_text(r_el):
+    t = r_el.find(qn("w:t"))
+    return (t.text or "") if t is not None else ""
+
+
+def _all_run_elements(paragraph):
+    return paragraph._p.findall(".//" + qn("w:r"))
+
+
 def _smart_replace_in_paragraph(paragraph, old, new):
-    runs = paragraph.runs
-    full_text = "".join(r.text for r in runs)
+    run_els = _all_run_elements(paragraph)
+    full_text = "".join(_run_text(el) for el in run_els)
 
     occurrences = []
     pos = full_text.find(old)
@@ -71,14 +81,14 @@ def _smart_replace_in_paragraph(paragraph, old, new):
         affected_starts = []
         affected_ends = []
         accum = 0
-        for i, run in enumerate(runs):
+        for i, el in enumerate(run_els):
             run_start = accum
-            run_end = accum + len(run.text)
+            run_end = accum + len(_run_text(el))
             if pos < run_end and match_end > run_start:
                 affected_indices.append(i)
                 affected_starts.append(run_start)
                 affected_ends.append(run_end)
-            accum += len(run.text)
+            accum += len(_run_text(el))
 
         if not affected_indices:
             continue
@@ -87,6 +97,8 @@ def _smart_replace_in_paragraph(paragraph, old, new):
 
         for idx in range(len(affected_indices) - 1, -1, -1):
             i = affected_indices[idx]
+            el = run_els[i]
+            t_el = el.find(qn("w:t"))
             run_start = affected_starts[idx]
             run_end = affected_ends[idx]
 
@@ -98,21 +110,20 @@ def _smart_replace_in_paragraph(paragraph, old, new):
             is_first_run = idx == 0
 
             if is_multi and is_last_run:
-                old_suffix = runs[i].text[match_start_in_run:match_end_in_run]
+                old_suffix = t_el.text[match_start_in_run:match_end_in_run]
                 if len(old_suffix) > 0 and remaining_new.endswith(old_suffix):
                     remaining_new = remaining_new[: -len(old_suffix)]
                     continue
 
             if is_first_run:
-                runs[i].text = (
-                    runs[i].text[:match_start_in_run]
+                t_el.text = (
+                    t_el.text[:match_start_in_run]
                     + remaining_new
-                    + runs[i].text[match_end_in_run:]
+                    + t_el.text[match_end_in_run:]
                 )
             else:
-                runs[i].text = (
-                    runs[i].text[:match_start_in_run]
-                    + runs[i].text[match_end_in_run:]
+                t_el.text = (
+                    t_el.text[:match_start_in_run] + t_el.text[match_end_in_run:]
                 )
 
     return len(occurrences)
@@ -131,9 +142,7 @@ def _smart_replace_string(doc, old, new, include_tables=True, max_paragraph=None
                 for cell in row.cells:
                     for paragraph in cell.paragraphs:
                         if old in paragraph.text:
-                            total += _smart_replace_in_paragraph(
-                                paragraph, old, new
-                            )
+                            total += _smart_replace_in_paragraph(paragraph, old, new)
     return total
 
 
@@ -169,9 +178,7 @@ def _replace_up_to(doc, args):
             f"({count} instance(s), smart=True)"
         )
     else:
-        docxedit.replace_string_up_to_paragraph(
-            doc, args.old, args.new, args.paragraph
-        )
+        docxedit.replace_string_up_to_paragraph(doc, args.old, args.new, args.paragraph)
         _save_doc(doc, args)
         print(
             f"Replaced '{args.old}' with '{args.new}' up to paragraph {args.paragraph}"

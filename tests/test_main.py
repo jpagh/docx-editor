@@ -1,4 +1,3 @@
-import argparse
 import json
 import os
 import sys
@@ -8,15 +7,6 @@ import docx
 import pytest
 
 from main import (
-    _list_paragraphs,
-    _list_tables,
-    _replace,
-    _replace_up_to,
-    _remove_lines,
-    _set_table_cell,
-    _set_table_font_size,
-    _setup_parser,
-    _show,
     _smart_replace_in_paragraph,
     _smart_replace_string,
     main,
@@ -48,7 +38,11 @@ def _run(args: list[str], tmp_path: Path) -> str:
     return buf.getvalue().strip()
 
 
-def _make_doc(tmp_path: Path, paragraphs: list[str] | None = None, tables: list[list[list[str]]] | None = None) -> str:
+def _make_doc(
+    tmp_path: Path,
+    paragraphs: list[str] | None = None,
+    tables: list[list[list[str]]] | None = None,
+) -> str:
     """Create a .docx and return its path."""
     d = docx.Document()
     for text in paragraphs or []:
@@ -90,7 +84,13 @@ def test_list_paragraphs_plain(capsys, tmp_path):
 
 def test_list_paragraphs_json(capsys, tmp_path):
     _make_doc(tmp_path, ["Hello", "World"])
-    sys.argv = ["docx-editor", "-i", str(tmp_path / "in.docx"), "--json", "list-paragraphs"]
+    sys.argv = [
+        "docx-editor",
+        "-i",
+        str(tmp_path / "in.docx"),
+        "--json",
+        "list-paragraphs",
+    ]
     main()
     data = json.loads(capsys.readouterr().out)
     assert data == [{"index": 0, "text": "Hello"}, {"index": 1, "text": "World"}]
@@ -126,10 +126,22 @@ def test_list_tables_json(capsys, tmp_path):
 
 def test_replace_basic(capsys, tmp_path):
     _make_doc(tmp_path, ["Hello {{name}}"])
-    sys.argv = ["docx-editor", "-i", str(tmp_path / "in.docx"), "replace", "--old", "{{name}}", "--new", "Alice"]
+    sys.argv = [
+        "docx-editor",
+        "-i",
+        str(tmp_path / "in.docx"),
+        "replace",
+        "--old",
+        "{{name}}",
+        "--new",
+        "Alice",
+    ]
     main()
     assert _read_text(str(tmp_path / "in.docx")) == ["Hello Alice"]
-    assert capsys.readouterr().out.strip() == "Replaced '{{name}}' with 'Alice' (include_tables=True)"
+    assert (
+        capsys.readouterr().out.strip()
+        == "Replaced '{{name}}' with 'Alice' (include_tables=True)"
+    )
 
 
 def test_replace_no_tables(capsys, tmp_path):
@@ -138,8 +150,17 @@ def test_replace_no_tables(capsys, tmp_path):
     t = d.add_table(rows=1, cols=1)
     t.cell(0, 0).text = "{{x}}"
     d.save(str(tmp_path / "in.docx"))
-    sys.argv = ["docx-editor", "-i", str(tmp_path / "in.docx"), "replace",
-                "--old", "{{x}}", "--new", "y", "--skip-tables"]
+    sys.argv = [
+        "docx-editor",
+        "-i",
+        str(tmp_path / "in.docx"),
+        "replace",
+        "--old",
+        "{{x}}",
+        "--new",
+        "y",
+        "--skip-tables",
+    ]
     main()
     texts = _read_text(str(tmp_path / "in.docx"))
     assert "y" in texts[0]
@@ -151,7 +172,17 @@ def test_replace_no_tables(capsys, tmp_path):
 
 def test_smart_replace_single_run(capsys, tmp_path):
     path = _make_doc(tmp_path, ["Hello {{name}}"])
-    sys.argv = ["docx-editor", "-i", path, "replace", "--old", "{{name}}", "--new", "Alice", "--smart"]
+    sys.argv = [
+        "docx-editor",
+        "-i",
+        path,
+        "replace",
+        "--old",
+        "{{name}}",
+        "--new",
+        "Alice",
+        "--smart",
+    ]
     main()
     assert _read_text(path) == ["Hello Alice"]
     assert "smart=True" in capsys.readouterr().out
@@ -175,7 +206,7 @@ def test_smart_replace_suffix_preservation(tmp_path):
     d = docx.Document()
     p = d.add_paragraph()
     p.add_run("Value is ")
-    run2 = p.add_run("True")
+    p.add_run("True")
     run3 = p.add_run(" }}")
     path = str(tmp_path / "in.docx")
     d.save(path)
@@ -202,8 +233,17 @@ def test_smart_replace_multiple_occurrences(tmp_path):
 
 def test_smart_replace_with_tables(capsys, tmp_path):
     _make_doc(tmp_path, ["Hello {{name}}"], [[["Table {{name}}"]]])
-    sys.argv = ["docx-editor", "-i", str(tmp_path / "in.docx"), "replace",
-                "--old", "{{name}}", "--new", "Alice", "--smart"]
+    sys.argv = [
+        "docx-editor",
+        "-i",
+        str(tmp_path / "in.docx"),
+        "replace",
+        "--old",
+        "{{name}}",
+        "--new",
+        "Alice",
+        "--smart",
+    ]
     main()
     assert _read_text(str(tmp_path / "in.docx")) == ["Hello Alice"]
     assert _read_table_text(str(tmp_path / "in.docx"))[0][0] == "Table Alice"
@@ -212,7 +252,17 @@ def test_smart_replace_with_tables(capsys, tmp_path):
 
 def test_smart_replace_no_match(capsys, tmp_path):
     path = _make_doc(tmp_path, ["Hello world"])
-    sys.argv = ["docx-editor", "-i", path, "replace", "--old", "{{x}}", "--new", "y", "--smart"]
+    sys.argv = [
+        "docx-editor",
+        "-i",
+        path,
+        "replace",
+        "--old",
+        "{{x}}",
+        "--new",
+        "y",
+        "--smart",
+    ]
     main()
     assert "0 instance(s)" in capsys.readouterr().out
 
@@ -222,8 +272,18 @@ def test_smart_replace_no_match(capsys, tmp_path):
 
 def test_replace_up_to_basic(capsys, tmp_path):
     _make_doc(tmp_path, ["Line A {{x}}", "Line B {{x}}", "Line C {{x}}"])
-    sys.argv = ["docx-editor", "-i", str(tmp_path / "in.docx"), "replace-up-to",
-                "--old", "{{x}}", "--new", "y", "--paragraph", "2"]
+    sys.argv = [
+        "docx-editor",
+        "-i",
+        str(tmp_path / "in.docx"),
+        "replace-up-to",
+        "--old",
+        "{{x}}",
+        "--new",
+        "y",
+        "--paragraph",
+        "2",
+    ]
     main()
     texts = _read_text(str(tmp_path / "in.docx"))
     assert "y" in texts[0]
@@ -243,8 +303,19 @@ def test_replace_up_to_smart(capsys, tmp_path):
     assert count == 2
     texts = [p.text for p in docx.Document(path).paragraphs]
     # _smart_replace_string modifies in-memory, doesn't save; load original
-    sys.argv = ["docx-editor", "-i", path, "replace-up-to",
-                "--old", "{{x}}", "--new", "y", "--paragraph", "2", "--smart"]
+    sys.argv = [
+        "docx-editor",
+        "-i",
+        path,
+        "replace-up-to",
+        "--old",
+        "{{x}}",
+        "--new",
+        "y",
+        "--paragraph",
+        "2",
+        "--smart",
+    ]
     main()
     texts = _read_text(path)
     assert "y" in texts[0]
@@ -258,28 +329,58 @@ def test_replace_up_to_smart(capsys, tmp_path):
 
 def test_show_found(capsys, tmp_path):
     _make_doc(tmp_path, ["Hello World", "Goodbye"])
-    sys.argv = ["docx-editor", "-i", str(tmp_path / "in.docx"), "show", "--text", "World"]
+    sys.argv = [
+        "docx-editor",
+        "-i",
+        str(tmp_path / "in.docx"),
+        "show",
+        "--text",
+        "World",
+    ]
     main()
     assert "Hello World" in capsys.readouterr().out
 
 
 def test_show_not_found(capsys, tmp_path):
     _make_doc(tmp_path, ["Hello World"])
-    sys.argv = ["docx-editor", "-i", str(tmp_path / "in.docx"), "show", "--text", "Nope"]
+    sys.argv = [
+        "docx-editor",
+        "-i",
+        str(tmp_path / "in.docx"),
+        "show",
+        "--text",
+        "Nope",
+    ]
     main()
     assert "No matches" in capsys.readouterr().out
 
 
 def test_show_json(capsys, tmp_path):
     _make_doc(tmp_path, ["Hello World"])
-    sys.argv = ["docx-editor", "-i", str(tmp_path / "in.docx"), "--json", "show", "--text", "World"]
+    sys.argv = [
+        "docx-editor",
+        "-i",
+        str(tmp_path / "in.docx"),
+        "--json",
+        "show",
+        "--text",
+        "World",
+    ]
     main()
     assert json.loads(capsys.readouterr().out) == {"found": True, "text": "Hello World"}
 
 
 def test_show_json_not_found(capsys, tmp_path):
     _make_doc(tmp_path, ["Hello World"])
-    sys.argv = ["docx-editor", "-i", str(tmp_path / "in.docx"), "--json", "show", "--text", "Nope"]
+    sys.argv = [
+        "docx-editor",
+        "-i",
+        str(tmp_path / "in.docx"),
+        "--json",
+        "show",
+        "--text",
+        "Nope",
+    ]
     main()
     assert json.loads(capsys.readouterr().out) == {"found": False, "text": ""}
 
@@ -289,8 +390,16 @@ def test_show_json_not_found(capsys, tmp_path):
 
 def test_remove_lines(capsys, tmp_path):
     _make_doc(tmp_path, ["Line A", "Line B", "Line C", "Line D"])
-    sys.argv = ["docx-editor", "-i", str(tmp_path / "in.docx"), "remove-lines",
-                "--first-line", "Line B", "--count", "2"]
+    sys.argv = [
+        "docx-editor",
+        "-i",
+        str(tmp_path / "in.docx"),
+        "remove-lines",
+        "--first-line",
+        "Line B",
+        "--count",
+        "2",
+    ]
     main()
     texts = _read_text(str(tmp_path / "in.docx"))
     assert texts == ["Line A", "Line D"]
@@ -301,8 +410,20 @@ def test_remove_lines(capsys, tmp_path):
 
 def test_set_table_cell(capsys, tmp_path):
     _make_doc(tmp_path, tables=[[["old"]]])
-    sys.argv = ["docx-editor", "-i", str(tmp_path / "in.docx"), "set-table-cell",
-                "--table-idx", "0", "--row", "0", "--col", "0", "--text", "new"]
+    sys.argv = [
+        "docx-editor",
+        "-i",
+        str(tmp_path / "in.docx"),
+        "set-table-cell",
+        "--table-idx",
+        "0",
+        "--row",
+        "0",
+        "--col",
+        "0",
+        "--text",
+        "new",
+    ]
     main()
     assert _read_table_text(str(tmp_path / "in.docx"))[0][0] == "new"
 
@@ -316,8 +437,16 @@ def test_set_table_font_size(capsys, tmp_path):
     run = d.tables[0].cell(0, 0).paragraphs[0].add_run("text")
     run.font.size = docx.shared.Pt(10)
     d.save(str(tmp_path / "in.docx"))
-    sys.argv = ["docx-editor", "-i", str(tmp_path / "in.docx"), "set-table-font-size",
-                "--table-idx", "0", "--size", "18"]
+    sys.argv = [
+        "docx-editor",
+        "-i",
+        str(tmp_path / "in.docx"),
+        "set-table-font-size",
+        "--table-idx",
+        "0",
+        "--size",
+        "18",
+    ]
     main()
     reopened = docx.Document(str(tmp_path / "in.docx"))
     cell_run = reopened.tables[0].cell(0, 0).paragraphs[0].runs[0]
@@ -330,10 +459,21 @@ def test_set_table_font_size(capsys, tmp_path):
 def test_output_flag(tmp_path):
     _make_doc(tmp_path, ["Hello {{name}}"])
     out_path = str(tmp_path / "out.docx")
-    sys.argv = ["docx-editor", "-i", str(tmp_path / "in.docx"), "-o", out_path,
-                "replace", "--old", "{{name}}", "--new", "Alice"]
+    sys.argv = [
+        "docx-editor",
+        "-i",
+        str(tmp_path / "in.docx"),
+        "-o",
+        out_path,
+        "replace",
+        "--old",
+        "{{name}}",
+        "--new",
+        "Alice",
+    ]
     from io import StringIO
     from contextlib import redirect_stdout
+
     with redirect_stdout(StringIO()):
         main()
     assert _read_text(str(tmp_path / "in.docx")) == ["Hello {{name}}"]
@@ -342,9 +482,19 @@ def test_output_flag(tmp_path):
 
 def test_backup_created(tmp_path):
     path = _make_doc(tmp_path, ["original"])
-    sys.argv = ["docx-editor", "-i", path, "replace", "--old", "original", "--new", "modified"]
+    sys.argv = [
+        "docx-editor",
+        "-i",
+        path,
+        "replace",
+        "--old",
+        "original",
+        "--new",
+        "modified",
+    ]
     from io import StringIO
     from contextlib import redirect_stdout
+
     with redirect_stdout(StringIO()):
         main()
     assert os.path.exists(path + ".bak")
@@ -356,7 +506,12 @@ def test_backup_created(tmp_path):
 
 
 def test_file_not_found(capsys, tmp_path):
-    sys.argv = ["docx-editor", "-i", str(tmp_path / "nonexistent.docx"), "list-paragraphs"]
+    sys.argv = [
+        "docx-editor",
+        "-i",
+        str(tmp_path / "nonexistent.docx"),
+        "list-paragraphs",
+    ]
     with pytest.raises(SystemExit):
         main()
     assert "not found" in capsys.readouterr().err
@@ -364,8 +519,20 @@ def test_file_not_found(capsys, tmp_path):
 
 def test_table_index_out_of_range(capsys, tmp_path):
     _make_doc(tmp_path, [])
-    sys.argv = ["docx-editor", "-i", str(tmp_path / "in.docx"), "set-table-cell",
-                "--table-idx", "99", "--row", "0", "--col", "0", "--text", "x"]
+    sys.argv = [
+        "docx-editor",
+        "-i",
+        str(tmp_path / "in.docx"),
+        "set-table-cell",
+        "--table-idx",
+        "99",
+        "--row",
+        "0",
+        "--col",
+        "0",
+        "--text",
+        "x",
+    ]
     with pytest.raises(SystemExit):
         main()
     assert "out of range" in capsys.readouterr().err
@@ -437,6 +604,42 @@ class TestSmartReplaceInParagraph:
         texts = [r.text for r in p.runs]
         assert texts == ["keep1 ", "done", " keep2"]
 
+    def test_text_inside_hyperlink(self):
+        """Regression: text inside hyperlinks should be matched (paragraph.runs misses nested runs)."""
+        from lxml import etree as _etree
+        from docx.oxml.ns import qn as _qn
+
+        d = docx.Document()
+        p = d.add_paragraph()
+        p.add_run("before ")
+        hyperlink = _etree.SubElement(p._p, _qn("w:hyperlink"))
+        hl_run = _etree.SubElement(hyperlink, _qn("w:r"))
+        hl_t = _etree.SubElement(hl_run, _qn("w:t"))
+        hl_t.text = "{{ hidden }}"
+        p.add_run(" after")
+        assert _smart_replace_in_paragraph(p, "{{ hidden }}", "revealed") == 1
+        assert p.text == "before revealed after"
+
+    def test_text_inside_hyperlink_in_table_cell(self):
+        """Regression: table cells with hyperlinked runs should be matchable by smart replace."""
+        from lxml import etree as _etree
+        from docx.oxml.ns import qn as _qn
+
+        d = docx.Document()
+        t = d.add_table(rows=1, cols=1)
+        p = t.cell(0, 0).paragraphs[0]
+        p.add_run("prefix ")
+        hyperlink = _etree.SubElement(p._p, _qn("w:hyperlink"))
+        hl_run = _etree.SubElement(hyperlink, _qn("w:r"))
+        hl_t = _etree.SubElement(hl_run, _qn("w:t"))
+        hl_t.text = "|request %}"
+        p.add_run(" suffix")
+        count = _smart_replace_string(
+            d, "|request %}", "== true %}", include_tables=True
+        )
+        assert count == 1
+        assert t.cell(0, 0).text == "prefix == true %} suffix"
+
 
 # ── internal: _smart_replace_string ──────────────────────────────
 
@@ -471,4 +674,3 @@ def test_smart_replace_string_max_paragraph(tmp_path):
     assert texts[0] == "A y"
     assert texts[1] == "B y"
     assert texts[2] == "C {{x}}"
-
